@@ -3,13 +3,32 @@ import copy
 import warnings
 import shutil
 from functools import partial
-
+import time
 import torch
 
 from .model import load_pretrained_model
 from .mm_utils import process_image, process_video, tokenizer_multimodal_token, get_model_name_from_path, KeywordsStoppingCriteria, process_audio_file
 from .constants import NUM_FRAMES, DEFAULT_IMAGE_TOKEN, DEFAULT_VIDEO_TOKEN, MODAL_INDEX_MAP, DEFAULT_AUDIO_TOKEN
 
+from transformers import StoppingCriteria, StoppingCriteriaList
+
+class FeatureExtractionStopper(StoppingCriteria):
+    """
+    Stops the model's generation pipeline as soon as the token sequence 
+    length is just long enough to ensure feature extraction has occurred.
+    
+    The initial input_ids contain the prompt + multimodal tokens. 
+    We stop after the sequence length is just 1 token longer than the input 
+    (i.e., after the first output token is generated).
+    """
+    def __init__(self, initial_length, required_tokens=1):
+        super().__init__()
+        # Initial length is the length of the prompt/input_ids before generation starts
+        self.target_length = initial_length + required_tokens 
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        # Stop generation once the total length reaches the target length
+        return input_ids.shape[-1] >= self.target_length
 
 def model_init(model_path=None, **kwargs):
     model_path = "DAMO-NLP-SG/VideoLLaMA2-7B" if model_path is None else model_path
@@ -98,9 +117,11 @@ def mm_infer(image_or_video, instruct, model, tokenizer, modal='video', **kwargs
     do_sample = kwargs.get('do_sample', False)
     temperature = kwargs.get('temperature', 0.2 if do_sample else 0.0)
     top_p = kwargs.get('top_p', 0.9)
-    max_new_tokens = kwargs.get('max_new_tokens', 2048)
-
+    max_new_tokens = kwargs.get('max_new_tokens', 1)
+    initial_length = input_ids.shape[-1]
+    custom_stopper = FeatureExtractionStopper(initial_length=initial_length, required_tokens=1)
     with torch.inference_mode():
+        start_time = time.time()
         output_ids = model.generate(
             input_ids,
             attention_mask=attention_masks,
@@ -110,10 +131,12 @@ def mm_infer(image_or_video, instruct, model, tokenizer, modal='video', **kwargs
             max_new_tokens=max_new_tokens,
             top_p=top_p,
             use_cache=True,
-            stopping_criteria=[stopping_criteria],
+            stopping_criteria=StoppingCriteriaList([custom_stopper]),
             pad_token_id=tokenizer.eos_token_id,
         )
 
     outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-
+    end_time = time.time()
+    duration = end_time - start_time
+    print(f"Generation Duration - mod: {duration:.4f} seconds")
     return outputs
