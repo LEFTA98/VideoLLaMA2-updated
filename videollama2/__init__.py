@@ -119,7 +119,7 @@ def mm_infer(image_or_video, instruct, model, tokenizer, modal='video', **kwargs
     top_p = kwargs.get('top_p', 0.9)
     max_new_tokens = kwargs.get('max_new_tokens', 1)
     initial_length = input_ids.shape[-1]
-    custom_stopper = FeatureExtractionStopper(initial_length=initial_length, required_tokens=1)
+    custom_stopper = FeatureExtractionStopper(initial_length=initial_length, required_tokens=kwargs.get('required_tokens',1))
     with torch.inference_mode():
         start_time = time.time()
         output_ids = model.generate(
